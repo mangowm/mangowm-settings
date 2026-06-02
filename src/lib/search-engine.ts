@@ -4,6 +4,8 @@ import { useConfigStore } from "./config-store";
 import { SECTIONS } from "./sections";
 import type { ConfigData } from "./config-types";
 import type { DynamicIndexSource, DynamicSearchItem } from "./section-types";
+import { parseKeybindings } from "./keybind-parse";
+import { DISPATCHER_MAP } from "./dispatchers";
 
 interface SearchDocument {
   id: string;
@@ -117,6 +119,19 @@ export const DYNAMIC_SOURCES: DynamicIndexSource[] = [
           configKey: "env",
         };
       }),
+  },
+  {
+    sourceId: "keybindings",
+    watchKeys: ["bind", "binds", "bindl", "bindr", "bindp"],
+    buildItems: (data) =>
+      parseKeybindings(data).map((b, i) => ({
+        id: `keybind:${i}`,
+        label: `${b.func} (${b.mods || "none"} + ${b.key})`,
+        description: DISPATCHER_MAP.get(b.func)?.description ?? b.func,
+        sectionLabel: "Keybindings",
+        sectionId: "keybindings",
+        configKey: b.configKey,
+      })),
   },
 ];
 
