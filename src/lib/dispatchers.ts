@@ -469,6 +469,7 @@ export function getDispatchersByCategory(): [DispatcherCategory, DispatcherInfo[
     "navigation",
     "tags",
     "layout",
+    "spawn",
     "system",
     "floating",
   ];
