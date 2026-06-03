@@ -7,13 +7,12 @@
  * + useKeyRecorder for key-only capture — no inline recorder.
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useConfigStore } from "@/lib/config-store";
 import {
   parseKeybindingsFromFiles,
   getActiveModeAtEnd,
   serializeBindingEntry,
-  serializeModifiers,
   parseModifiers,
 } from "@/lib/keybind-parse";
 import { xkbToDisplay } from "@/lib/key-name-map";
@@ -65,33 +64,6 @@ function entryToCombo(entry: KeybindEntry): KeyCombo {
   };
 }
 
-function comboToMods(combo: KeyCombo): string {
-  const parts: string[] = [];
-  if (combo.super) parts.push("super");
-  if (combo.ctrl) parts.push("ctrl");
-  if (combo.alt) parts.push("alt");
-  if (combo.shift) parts.push("shift");
-  return serializeModifiers(parts);
-}
-
-// ─── Combo comparison ────────────────────────────────────────────────────────
-
-function combosMatch(a: KeyCombo | null, b: KeyCombo | null): boolean {
-  if (a === null && b === null) return true;
-  if (!a || !b) return false;
-  return (
-    a.key === b.key &&
-    !!a.ctrl === !!b.ctrl &&
-    !!a.alt === !!b.alt &&
-    !!a.shift === !!b.shift &&
-    !!a.super === !!b.super
-  );
-}
-
-// ─── Conflict helper ────────────────────────────────────────────────────────
-
-
-
 // ─── KeyBadge ─────────────────────────────────────────────────────────────────
 
 function KeyBadge({ label }: { label: string }) {
@@ -141,9 +113,7 @@ interface BindingRowProps {
   entry: KeybindEntry;
   label: string;
   description: string;
-  originalCombo: KeyCombo | null;
   onEdit: () => void;
-  onReset: () => void;
   onDelete: () => void;
 }
 
@@ -151,13 +121,10 @@ function BindingRow({
   entry,
   label,
   description,
-  originalCombo,
   onEdit,
-  onReset,
   onDelete,
 }: BindingRowProps) {
   const currentCombo = useMemo(() => entryToCombo(entry), [entry]);
-  const isModified = !combosMatch(currentCombo, originalCombo);
 
   return (
     <div className={cn(
@@ -173,11 +140,6 @@ function BindingRow({
           <span className="text-sm font-medium text-foreground leading-none">
             {label}
           </span>
-          {isModified && (
-            <span className="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary leading-none">
-              modified
-            </span>
-          )}
         </div>
         {description && (
           <span className="text-xs text-muted-foreground/70 leading-normal mt-0.5">
@@ -205,25 +167,6 @@ function BindingRow({
             <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
           </svg>
         </button>
-
-        {/* Reset */}
-        {isModified && (
-          <button
-            onClick={onReset}
-            title="Reset to original"
-            aria-label={`Reset ${label} to original`}
-            className={cn(
-              "flex-shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 transition-opacity",
-              "text-muted-foreground hover:text-foreground hover:bg-muted",
-              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-            )}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-              <path d="M3 3v5h5"/>
-            </svg>
-          </button>
-        )}
 
         {/* Delete */}
         <button
@@ -264,18 +207,6 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
 
   const allEntries = useMemo(() => parseKeybindingsFromFiles(files), [files]);
 
-  // Store original combos for per-binding reset
-  const originalCombosRef = useRef<Map<string, KeyCombo>>(new Map());
-
-  // Keep originals in sync — reset whenever entries change structurally
-  useEffect(() => {
-    const map = new Map<string, KeyCombo>();
-    for (const e of allEntries) {
-      map.set(`${e.configKey}[${e.configIndex}]`, entryToCombo(e));
-    }
-    originalCombosRef.current = map;
-  }, [allEntries]);
-
   // ── UI state ──────────────────────────────────────────────────────────────
 
   const [search, setSearch] = useState("");
@@ -315,40 +246,7 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
     return g;
   }, [filtered]);
 
-  const modifiedCount = useMemo(
-    () => allEntries.filter((e) => {
-      const orig = originalCombosRef.current.get(`${e.configKey}[${e.configIndex}]`);
-      return orig ? !combosMatch(entryToCombo(e), orig) : false;
-    }).length,
-    [allEntries],
-  );
-
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
-
   // ── Handlers ──────────────────────────────────────────────────────────────
-
-  const entryKey = (e: KeybindEntry) => `${e.configKey}[${e.configIndex}]`;
-
-  const handleReset = useCallback((entry: KeybindEntry) => {
-    const orig = originalCombosRef.current.get(entryKey(entry));
-    if (orig) {
-      const newMods = comboToMods(orig);
-      const newValue = [newMods, orig.key, entry.func, entry.args].filter(Boolean).join(",");
-      updateEntry(entry.configKey, entry.configIndex, newValue);
-    }
-  }, [updateEntry]);
-
-  const handleResetAll = useCallback(() => {
-    for (const e of allEntries) {
-      const orig = originalCombosRef.current.get(entryKey(e));
-      if (orig) {
-        const newMods = comboToMods(orig);
-        const newValue = [newMods, orig.key, e.func, e.args].filter(Boolean).join(",");
-        updateEntry(e.configKey, e.configIndex, newValue);
-      }
-    }
-    setShowResetConfirm(false);
-  }, [allEntries, updateEntry]);
 
   const handleDelete = useCallback((entry: KeybindEntry) => {
     removeEntry(entry.configKey, entry.configIndex);
@@ -405,47 +303,7 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0 pt-0.5">
-          {/* Reset all */}
-          {modifiedCount > 0 && !showResetConfirm && (
-            <button
-              onClick={() => setShowResetConfirm(true)}
-              className={cn(
-                "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium",
-                "border border-border text-muted-foreground hover:bg-muted transition-colors",
-              )}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
-              </svg>
-              Reset ({modifiedCount})
-            </button>
-          )}
 
-          {showResetConfirm && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Reset all {modifiedCount} changes?</span>
-              <button
-                onClick={handleResetAll}
-                className={cn(
-                  "inline-flex h-7 items-center rounded-md px-2.5 text-xs font-medium",
-                  "bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors",
-                )}
-              >
-                Reset all
-              </button>
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                className={cn(
-                  "inline-flex h-7 items-center rounded-md px-2.5 text-xs font-medium",
-                  "border border-border hover:bg-muted transition-colors",
-                )}
-              >
-                Keep
-              </button>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Search + Category tabs */}
@@ -509,17 +367,6 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
               )}
             >
               {cat}
-              {cat === "All" && modifiedCount > 0 && (
-                <span className={cn(
-                  "ml-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1",
-                  "text-[10px] font-medium leading-none",
-                  activeCategory === cat
-                    ? "bg-primary-foreground/20 text-primary-foreground"
-                    : "bg-primary/10 text-primary",
-                )}>
-                  {modifiedCount}
-                </span>
-              )}
             </button>
           ))}
         </div>
@@ -563,16 +410,14 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
               <div className="rounded-xl border border-border overflow-hidden">
                 {items.map(e => {
                   const desc = DISPATCHER_MAP.get(e.func)?.description ?? (e.args || e.func);
-                  const ek = entryKey(e);
+                  const ek = `${e.configKey}[${e.configIndex}]`;
                   return (
                     <BindingRow
                       key={ek}
                       entry={e}
                       label={e.func}
                       description={desc}
-                      originalCombo={originalCombosRef.current.get(ek) ?? null}
                       onEdit={() => handleOpenDialog(e)}
-                      onReset={() => handleReset(e)}
                       onDelete={() => handleDelete(e)}
                     />
                   );

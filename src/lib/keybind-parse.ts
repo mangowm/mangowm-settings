@@ -33,24 +33,61 @@ export function parseKeybindingsFromFiles(files: SourceFile[]): KeybindEntry[] {
   const globalIdx: Record<string, number> = {};
 
   for (const file of files) {
+    // Per-file consumption counter for data[key] arrays.
+    // Entry lines consume one value from data[key] in order.
+    const consumed: Record<string, number> = {};
+
     for (const line of file.lines) {
       if (line.type !== "entry") continue;
-      const { key, value } = line;
+      const { key } = line;
 
       if (key === "keymode") {
-        currentMode = value;
+        const dataValues = file.data[key] ?? [];
+        const localIdx = consumed[key] ?? 0;
+        if (localIdx < dataValues.length) {
+          currentMode = dataValues[localIdx];
+          consumed[key] = localIdx + 1;
+        }
         continue;
       }
 
       if (!isBindKey(key)) continue;
 
       const idx = globalIdx[key] ?? 0;
-      const entry = parseSingleBinding(key, idx, value);
-      if (entry) {
-        entry.mode = currentMode;
-        entries.push(entry);
+      const dataValues = file.data[key] ?? [];
+      const localIdx = consumed[key] ?? 0;
+
+      if (localIdx < dataValues.length) {
+        const value = dataValues[localIdx];
+        const entry = parseSingleBinding(key, idx, value);
+        if (entry) {
+          entry.mode = currentMode;
+          entries.push(entry);
+        }
+        consumed[key] = localIdx + 1;
       }
+      // If data is exhausted for this key, the line represents a
+      // removed entry — skip it. The global index still increments
+      // so that remaining entries keep their original global indices.
       globalIdx[key] = idx + 1;
+    }
+
+    // New entries added via addEntry have data values with no
+    // corresponding lines — append them at the end.
+    for (const key of Object.keys(file.data)) {
+      if (!isBindKey(key)) continue;
+      const dataValues = file.data[key] ?? [];
+      let localIdx = consumed[key] ?? 0;
+      while (localIdx < dataValues.length) {
+        const idx = globalIdx[key] ?? 0;
+        const entry = parseSingleBinding(key, idx, dataValues[localIdx]);
+        if (entry) {
+          entry.mode = currentMode;
+          entries.push(entry);
+        }
+        globalIdx[key] = idx + 1;
+        localIdx++;
+      }
     }
   }
 
@@ -58,11 +95,20 @@ export function parseKeybindingsFromFiles(files: SourceFile[]): KeybindEntry[] {
 }
 
 export function getActiveModeAtEnd(files: SourceFile[]): string {
+  // Walk files in order; for each file, take the last value from
+  // data["keymode"] (which reflects mutations). Fall back to lines
+  // only if data["keymode"] is missing or empty.
   let mode = "default";
   for (const file of files) {
-    for (const line of file.lines) {
-      if (line.type === "entry" && line.key === "keymode") {
-        mode = line.value;
+    const modes = file.data["keymode"];
+    if (modes && modes.length > 0) {
+      mode = modes[modes.length - 1];
+    } else {
+      // Fallback: walk lines for pre-existing mode entries
+      for (const line of file.lines) {
+        if (line.type === "entry" && line.key === "keymode") {
+          mode = line.value;
+        }
       }
     }
   }
