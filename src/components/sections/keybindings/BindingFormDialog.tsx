@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -11,15 +11,13 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
-import { Terminal, Settings2, Command, SearchIcon } from "lucide-react";
-import { useKeyRecorder } from "@/lib/key-recorder";
-import { xkbToDisplay } from "@/lib/key-name-map";
+import { Terminal, Settings2, Command } from "lucide-react";
 import type { SourceFile } from "@/lib/config-types";
 import type { KeybindEntry, KeybindFlags } from "@/lib/keybind-types";
 import { cn } from "@/lib/utils";
 import { bindKeyFromFlags, serializeModifiers, parseModifiers, findInsertPosition } from "@/lib/keybind-parse";
 import { DispatcherCombobox } from "./DispatcherCombobox";
-import { KeyCombobox } from "./KeyCombobox";
+import { KeyCapture } from "./KeyCapture";
 import { ModeCombobox } from "./ModeCombobox";
 import type { DispatcherArg } from "@/lib/dispatchers";
 import {
@@ -284,32 +282,7 @@ export function BindingFormDialog({
   const [argErrors, setArgErrors] = useState<Record<string, string | null>>({});
 
   // ── Key capture (shared hook, key-only mode — modifiers from buttons) ──
-  const keyRecorder = useKeyRecorder(
-    useCallback((combo) => {
-      setKey(combo.key);
-    }, []),
-  );
-  const keyCaptureRef = useRef<HTMLInputElement>(null);
-  const [showKeyBrowser, setShowKeyBrowser] = useState(false);
-  const keyBrowserRef = useRef<HTMLDivElement>(null);
-
-  // Click outside to close key browser
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (keyBrowserRef.current && !keyBrowserRef.current.contains(e.target as Node))
-        setShowKeyBrowser(false);
-    }
-    if (showKeyBrowser) document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showKeyBrowser]);
-
-  // Auto-focus the hidden capture input when recording starts
-  useEffect(() => {
-    if (keyRecorder.status === "recording") {
-      const id = setTimeout(() => keyCaptureRef.current?.focus(), 0);
-      return () => clearTimeout(id);
-    }
-  }, [keyRecorder.status]);
+  // Key capture is handled by the <KeyCapture> component
 
   const isEditing = !!editingEntry;
 
@@ -509,130 +482,7 @@ export function BindingFormDialog({
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-2">
                     Key
                   </p>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1">
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={
-                          keyRecorder.status === "recording"
-                            ? undefined
-                            : keyRecorder.start
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ")
-                            keyRecorder.start();
-                        }}
-                        className={cn(
-                          "flex items-center gap-2 rounded-lg border px-3 py-2.5 transition-colors cursor-pointer select-none",
-                          keyRecorder.status === "recording"
-                            ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                            : key
-                              ? "border-border bg-background hover:border-border/80"
-                              : "border-dashed border-muted-foreground/30 bg-background hover:border-muted-foreground/50",
-                        )}
-                      >
-                        {keyRecorder.status === "recording" ? (
-                          <>
-                            <span className="relative flex h-2 w-2 flex-shrink-0">
-                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-                              <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-                            </span>
-                            <span className="text-xs text-muted-foreground flex-1">
-                              Press a key on your keyboard…
-                            </span>
-                            <kbd className="text-[10px] text-muted-foreground/50 border border-border rounded px-1">
-                              Esc to cancel
-                            </kbd>
-                          </>
-                        ) : key ? (
-                          <>
-                            <kbd className="inline-flex items-center justify-center h-[26px] min-w-[26px] px-2 rounded-[5px] font-mono text-xs font-semibold leading-none border border-border bg-muted text-foreground select-none shadow-[0_1px_0_0_hsl(var(--border))]">
-                              {xkbToDisplay(key)}
-                            </kbd>
-                            <span className="text-xs text-muted-foreground/50 ml-2">
-                              Click to change
-                            </span>
-                            <div className="flex-1" />
-                            <svg
-                              width="12"
-                              height="12"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              className="text-muted-foreground/30 shrink-0"
-                            >
-                              <path d="M12 20h9" />
-                              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-                            </svg>
-                          </>
-                        ) : (
-                          <>
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              className="text-muted-foreground/40 shrink-0"
-                              aria-hidden="true"
-                            >
-                              <circle cx="12" cy="12" r="10" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                            <span className="text-xs text-muted-foreground/60 flex-1">
-                              Click to record key…
-                            </span>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Hidden input that captures key events */}
-                      <input
-                        ref={keyCaptureRef}
-                        className="sr-only"
-                        aria-label="Key capture input"
-                        onKeyDown={(e) => {
-                          if (keyRecorder.status === "recording") {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            keyRecorder.handleKeyEvent(e.nativeEvent);
-                          }
-                        }}
-                        onBlur={() => {
-                          if (keyRecorder.status === "recording") {
-                            keyRecorder.cancel();
-                          }
-                        }}
-                        readOnly
-                      />
-                    </div>
-
-                    {/* Fallback: search all XKB keys */}
-                    <div className="relative shrink-0" ref={keyBrowserRef}>
-                      <button
-                        type="button"
-                        onClick={() => setShowKeyBrowser((o) => !o)}
-                        className="flex h-10 w-10 items-center justify-center rounded-lg border border-border/50 bg-background text-muted-foreground/40 hover:text-foreground hover:border-border transition-colors"
-                        title="Browse all keys"
-                      >
-                        <SearchIcon className="size-4" />
-                      </button>
-                      {showKeyBrowser && (
-                        <div className="absolute right-0 top-[calc(100%+4px)] z-50 w-72">
-                          <KeyCombobox
-                            value={key}
-                            onChange={(val) => {
-                              setKey(val);
-                              setShowKeyBrowser(false);
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <KeyCapture value={key} onChange={setKey} />
                 </div>
               </div>
             </div>
