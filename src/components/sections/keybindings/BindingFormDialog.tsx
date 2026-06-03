@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { bindKeyFromFlags, serializeModifiers, parseModifiers, findInsertPosition } from "@/lib/keybind-parse";
 import { DispatcherCombobox } from "./DispatcherCombobox";
 import { KeyCombobox } from "./KeyCombobox";
+import { ModeCombobox } from "./ModeCombobox";
 import type { DispatcherArg } from "@/lib/dispatchers";
 import {
   DISPATCHER_MAP,
@@ -671,18 +672,11 @@ export function BindingFormDialog({
             <div className="space-y-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Submap / Mode</label>
-                <input
+                <ModeCombobox
                   value={mode}
-                  onChange={(e) => setMode(e.target.value)}
-                  list="modes-list"
-                  placeholder="default"
-                  className="w-full bg-background border border-border/50 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  existingModes={existingModes}
+                  onChange={setMode}
                 />
-                <datalist id="modes-list">
-                  {existingModes.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
                   Isolate this binding to a specific context (e.g., &apos;resize&apos; mode).
                 </p>
