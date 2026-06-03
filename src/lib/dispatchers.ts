@@ -4,7 +4,8 @@ export type DispatcherCategory =
   | "tags"
   | "layout"
   | "system"
-  | "floating";
+  | "floating"
+  | "spawn";
 
 export interface DispatcherInfo {
   name: string;
@@ -243,17 +244,17 @@ export const MANGO_DISPATCHERS: DispatcherInfo[] = [
   // System
   {
     name: "spawn",
-    category: "system",
+    category: "spawn",
     description: "Execute a command (args are joined with spaces)",
   },
   {
     name: "spawn_shell",
-    category: "system",
+    category: "spawn",
     description: "Execute a shell command, supports pipes and shell operators (|, &&, ;)",
   },
   {
     name: "spawn_on_empty",
-    category: "system",
+    category: "spawn",
     description: "Execute a command only if the specified tag (1-9) is empty",
   },
   {
