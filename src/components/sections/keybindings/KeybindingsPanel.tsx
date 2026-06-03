@@ -1,10 +1,24 @@
 /**
  * KeybindingsPanel
  *
- * Lists all keyboard bindings with category filtering, search, conflict
- * detection, per-binding reset, and a full CRUD dialog for editing.
+ * Lists all keyboard bindings with category filtering, mode/context
+ * filtering, search, conflict detection, per-binding reset, and a full
+ * CRUD dialog for editing.
+ *
  * Combo editing uses the dialog's modifier buttons (interception-safe)
  * + useKeyRecorder for key-only capture — no inline recorder.
+ *
+ * ── Design intent ─────────────────────────────────────────────────
+ *   • Search is a standalone row — not crammed beside filter pills.
+ *   • Two filter dimensions are surfaced independently:
+ *       Category  — what the action does  (Layout, Windows, …)
+ *       Mode      — which submap context  (default, resize, …)
+ *   • Each binding row displays its mode as a compact tag so you
+ *     always see the context at a glance.
+ *   • Category section headings use a clean label + count without
+ *     ugly extending connector lines.
+ *   • The "Add" button lives in the search row — discoverable but
+ *     not competing with the top-right SegmentedControl.
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -22,13 +36,11 @@ import { useFocusField } from "@/lib/use-focus-field";
 import { DISPATCHER_MAP } from "@/lib/dispatchers";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Plus, Trash2, Search } from "lucide-react";
+import { Plus, Trash2, Search, Layers } from "lucide-react";
 import { BindingFormDialog } from "./BindingFormDialog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-// KeyCombo mirrors the combo shape used throughout the panel for
-// entry↔combo conversions.
 interface KeyCombo {
   key: string;
   ctrl: boolean;
@@ -37,9 +49,7 @@ interface KeyCombo {
   super: boolean;
 }
 
-// ─── Category mapping ───────────────────────────────────────────────────────
-// Categories are derived solely from the dispatcher definitions in
-// lib/dispatchers.ts — no special-casing or ad-hoc overrides.
+// ─── Category mapping ─────────────────────────────────────────────────────────
 
 function getEntryCategory(entry: KeybindEntry): string {
   const info = DISPATCHER_MAP.get(entry.func);
@@ -49,6 +59,11 @@ function getEntryCategory(entry: KeybindEntry): string {
 function allCategories(entries: KeybindEntry[]): string[] {
   const cats = new Set(entries.map(getEntryCategory));
   return ["All", ...Array.from(cats).sort()];
+}
+
+function allModes(entries: KeybindEntry[]): string[] {
+  const modes = new Set(entries.map((e) => e.mode));
+  return ["All", ...Array.from(modes).sort()];
 }
 
 // ─── Entry ↔ KeyCombo converters ────────────────────────────────────────────
@@ -107,6 +122,24 @@ function ComboDisplay({ combo }: { combo: KeyCombo | null }) {
   );
 }
 
+// ─── ModeTag ──────────────────────────────────────────────────────────────────
+
+function ModeTag({ mode }: { mode: string }) {
+  const isDefault = mode === "default";
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium",
+      "ring-1 ring-inset transition-colors select-none",
+      isDefault
+        ? "ring-border/40 text-muted-foreground/50 bg-muted/30"
+        : "ring-border/60 text-muted-foreground/70 bg-muted/50",
+    )}>
+      <Layers className="size-2.5 opacity-60" />
+      {mode}
+    </span>
+  );
+}
+
 // ─── BindingRow ───────────────────────────────────────────────────────────────
 
 interface BindingRowProps {
@@ -128,27 +161,28 @@ function BindingRow({
 
   return (
     <div className={cn(
-      "group grid gap-x-6 gap-y-1 px-4 py-3 transition-colors",
-      "border-b border-border/50 last:border-0",
-      "hover:bg-muted/30",
+      "group grid gap-x-4 gap-y-1 px-4 py-2.5 transition-colors",
+      "border-b border-border/30 last:border-0",
+      "hover:bg-muted/20",
     )}
     style={{ gridTemplateColumns: "1fr auto" }}
     >
-      {/* Label + description */}
-      <div className="flex min-w-0 flex-col justify-center gap-0.5">
+      {/* Label + description + mode */}
+      <div className="flex min-w-0 flex-col justify-center gap-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-foreground leading-none">
             {label}
           </span>
+          <ModeTag mode={entry.mode} />
         </div>
         {description && (
-          <span className="text-xs text-muted-foreground/70 leading-normal mt-0.5">
+          <span className="text-xs text-muted-foreground/60 leading-normal">
             {description}
           </span>
         )}
       </div>
 
-      {/* Controls */}
+      {/* Controls (combo + edit + delete) */}
       <div className="flex items-center gap-1">
         <button
           onClick={onEdit}
@@ -162,7 +196,7 @@ function BindingRow({
           <svg
             width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             strokeWidth="2" aria-hidden="true"
-            className="text-muted-foreground/30 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+            className="text-muted-foreground/20 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
           >
             <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
           </svg>
@@ -175,7 +209,7 @@ function BindingRow({
           aria-label={`Remove ${label}`}
           className={cn(
             "flex-shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 transition-opacity",
-            "text-muted-foreground hover:text-destructive hover:bg-destructive/10",
+            "text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10",
             "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           )}
         >
@@ -194,6 +228,41 @@ interface UndoData {
   mode: string;
 }
 
+// ─── FilterPill ───────────────────────────────────────────────────────────────
+
+function FilterPill({
+  label,
+  active,
+  onClick,
+  size = "sm",
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  size?: "sm" | "xs";
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center shrink-0 rounded-md font-medium select-none",
+        "transition-all duration-150",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        size === "sm" && "h-7 px-2.5 text-[11px]",
+        size === "xs" && "h-6 px-2 text-[10px] tracking-wide",
+        active
+          ? "bg-foreground text-background shadow-sm"
+          : "text-muted-foreground/55 hover:text-foreground hover:bg-muted/70",
+      )}
+    >
+      {label}
+      {label === "All" && active && (
+        <span className="ml-1.5 inline-flex size-1 rounded-full bg-current opacity-60" />
+      )}
+    </button>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function KeybindingsPanel({ focusKey }: PanelProps) {
@@ -210,18 +279,27 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
   // ── UI state ──────────────────────────────────────────────────────────────
 
   const [search, setSearch] = useState("");
-  const [activeCategory, setActiveCategory] = useState<string>("All");
+  const [activeCategory, setActiveCategory] = useState("All");
+  const [activeMode, setActiveMode] = useState("All");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<KeybindEntry | null>(null);
   const [undoData, setUndoData] = useState<UndoData | null>(null);
 
   const cats = useMemo(() => allCategories(allEntries), [allEntries]);
+  const modes = useMemo(() => allModes(allEntries), [allEntries]);
+  const hasMultipleModes = modes.length > 2;
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
     return allEntries.filter((e) => {
-      const cat = getEntryCategory(e);
-      if (activeCategory !== "All" && cat !== activeCategory) return false;
+      // Category filter
+      if (activeCategory !== "All") {
+        const cat = getEntryCategory(e);
+        if (cat !== activeCategory) return false;
+      }
+      // Mode filter
+      if (activeMode !== "All" && e.mode !== activeMode) return false;
+      // Search query
       if (!q) return true;
       const desc = DISPATCHER_MAP.get(e.func)?.description ?? "";
       return (
@@ -233,7 +311,7 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
         e.args.toLowerCase().includes(q)
       );
     });
-  }, [allEntries, search, activeCategory]);
+  }, [allEntries, search, activeCategory, activeMode]);
 
   const grouped = useMemo(() => {
     const g = new Map<string, KeybindEntry[]>();
@@ -264,12 +342,10 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
     const targetFileIdx = fileIdx === -1 ? 0 : fileIdx;
     const lines = files[targetFileIdx]?.lines ?? [];
 
-    // Try to restore the binding in its original mode block.
     const pos = findInsertPosition(lines, targetFileIdx, mode);
     if (pos) {
       insertEntry(key, value, pos);
     } else {
-      // Fall back: create a new mode block at end.
       const targetFile = files[targetFileIdx];
       const lastLineIdx = targetFile ? targetFile.lines.length - 1 : 0;
       if (mode !== "default") {
@@ -282,7 +358,6 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
     setUndoData(null);
   }, [undoData, files, insertEntry]);
 
-  // Auto-dismiss undo toast
   useEffect(() => {
     if (!undoData) return;
     const timer = setTimeout(() => setUndoData(null), 5000);
@@ -307,122 +382,162 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div ref={fieldRef("keybindings")} className="flex flex-col gap-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h2 className="text-base font-semibold">Keybindings</h2>
-          <p className="text-sm text-muted-foreground">
-            Manage system shortcuts, window rules, and custom shell scripts.
-            Click a keybinding to open the full editor.
-          </p>
-        </div>
-
-
+    <div ref={fieldRef("keybindings")} className="flex flex-col gap-5">
+      {/* ── Header ────────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold tracking-tight text-foreground">
+          Keybindings
+        </h2>
+        <p className="text-sm text-muted-foreground leading-relaxed max-w-prose">
+          Manage system shortcuts, window rules, and custom shell scripts.
+          Click a binding to edit.
+        </p>
       </div>
 
-      {/* Search + Category tabs */}
-      <div className="flex flex-col gap-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 size-3.5" />
-          <input
-            type="search"
-            placeholder="Search bindings by key, action, mode…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className={cn(
-              "h-9 w-full rounded-lg border border-border bg-background pl-9 pr-20 text-sm",
-              "placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring",
-              "transition-colors",
-            )}
-          />
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
-            <button
-              onClick={() => handleOpenDialog()}
-              aria-label="Add keybinding"
-              title="Add keybinding"
-              className={cn(
-                "flex items-center justify-center size-5 rounded text-muted-foreground/50",
-                "hover:text-foreground hover:bg-muted transition-colors",
-              )}
-            >
-              <Plus className="size-3.5" />
-            </button>
-            {search && (
-              <button
-                onClick={() => setSearch("")}
-                aria-label="Clear search"
-                className="flex items-center justify-center size-5 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted transition-colors"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            )}
+      {/* ── Search row ─────────────────────────────────────────────── */}
+      <div className="relative max-w-lg">
+        <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/40 transition-colors group-focus-within:text-muted-foreground/60" />
+        <input
+          type="text"
+          role="search"
+          placeholder="Search bindings by key, action, or mode…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className={cn(
+            "h-9 w-full rounded-xl border bg-background pl-10 text-sm",
+            "border-border/60 text-foreground placeholder:text-muted-foreground/35",
+            "transition-all duration-150",
+            "focus:outline-none focus:border-ring/50 focus:ring-2 focus:ring-ring/15",
+          )}
+        />
+      </div>
+
+      {/* ── Filter rows ────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-2">
+        {/* Category pills */}
+        <div className="flex items-center gap-2">
+          <div
+            role="tablist"
+            aria-label="Filter by category"
+            className="flex items-center gap-0.5 overflow-x-auto scrollbar-none -mx-1 px-1"
+          >
+            {cats.map(cat => (
+              <FilterPill
+                key={cat}
+                label={cat}
+                active={activeCategory === cat}
+                onClick={() => setActiveCategory(cat)}
+              />
+            ))}
           </div>
         </div>
 
-        <div
-          role="tablist"
-          aria-label="Filter by category"
-          className="flex gap-1 flex-wrap"
-        >
-          {cats.map(cat => (
-            <button
-              key={cat}
-              role="tab"
-              aria-selected={activeCategory === cat}
-              onClick={() => setActiveCategory(cat)}
-              className={cn(
-                "inline-flex h-7 items-center rounded-md px-3 text-xs font-medium transition-colors",
-                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                activeCategory === cat
-                  ? "bg-primary text-primary-foreground"
-                  : "border border-border text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-            >
-              {cat}
-            </button>
-          ))}
+        {hasMultipleModes && (
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/40 shrink-0">
+            Mode
+          </span>
+          <div
+            role="tablist"
+            aria-label="Filter by mode"
+            className="flex items-center gap-0.5 overflow-x-auto scrollbar-none"
+          >
+            {modes.map(m => (
+              <FilterPill
+                key={m}
+                label={m}
+                active={activeMode === m}
+                onClick={() => setActiveMode(m)}
+                size="xs"
+              />
+            ))}
+          </div>
         </div>
+        )}
       </div>
 
-      {/* Binding list */}
+      {/* ── Add button — contextual, placed between filters and list ── */}
+      <div className="flex items-center gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={() => handleOpenDialog()}
+        >
+          <Plus className="size-3.5" />
+          <span>Add Binding</span>
+        </Button>
+        {filtered.length > 0 && allEntries.length > 0 && (
+          <span className="text-[11px] tabular-nums text-muted-foreground/40">
+            {filtered.length === allEntries.length
+              ? `${allEntries.length} binding${allEntries.length !== 1 ? "s" : ""}`
+              : `${filtered.length} of ${allEntries.length} bindings`}
+          </span>
+        )}
+      </div>
+
+      {/* ── Binding list ────────────────────────────────────────────── */}
       {allEntries.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border py-10 text-center">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-muted-foreground/30" aria-hidden="true">
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border/60 py-12 text-center">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-muted-foreground/25" aria-hidden="true">
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
           </svg>
           <p className="text-sm text-muted-foreground">No bindings configured.</p>
-          <button
+          <Button
+            variant="link"
+            size="sm"
+            className="text-xs"
             onClick={() => handleOpenDialog()}
-            className="text-xs text-primary hover:underline"
           >
             Add your first keybinding
-          </button>
+          </Button>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border py-10 text-center">
-          <Search className="size-6 text-muted-foreground/30" aria-hidden="true" />
-          <p className="text-sm text-muted-foreground">No bindings match <span className="font-medium text-foreground">"{search}"</span></p>
-          <button onClick={() => setSearch("")} className="text-xs text-primary hover:underline">Clear search</button>
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border/60 py-12 text-center">
+          <Search className="size-6 text-muted-foreground/25" aria-hidden="true" />
+          <p className="text-sm text-muted-foreground">
+            No bindings match{" "}
+            <span className="font-medium text-foreground">"{search}"</span>
+            {activeCategory !== "All" && (
+              <span> in <span className="font-medium text-foreground">{activeCategory}</span></span>
+            )}
+            {activeMode !== "All" && (
+              <span> for mode <span className="font-medium text-foreground">{activeMode}</span></span>
+            )}
+          </p>
+          <div className="flex items-center gap-2 mt-1">
+            {search && (
+              <Button variant="link" size="sm" className="text-xs" onClick={() => setSearch("")}>
+                Clear search
+              </Button>
+            )}
+            {activeCategory !== "All" && (
+              <Button variant="link" size="sm" className="text-xs" onClick={() => setActiveCategory("All")}>
+                All categories
+              </Button>
+            )}
+            {activeMode !== "All" && (
+              <Button variant="link" size="sm" className="text-xs" onClick={() => setActiveMode("All")}>
+                All modes
+              </Button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-4">
           {[...grouped.entries()].map(([category, items]) => (
             <section key={category} aria-label={category}>
-              {(activeCategory === "All" || grouped.size > 1) && (
-                <div className="mb-1 flex items-center gap-3 px-1">
-                  <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                    {category}
-                  </h3>
-                  <div className="h-px flex-1 bg-border/50" />
-                  <span className="text-[11px] text-muted-foreground/40">
-                    {items.length}
-                  </span>
-                </div>
-              )}
-              <div className="rounded-xl border border-border overflow-hidden">
+              {/* Category heading — clean label + count, no connector line */}
+              <div className="mb-1.5 flex items-center gap-2 px-0.5">
+                <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/45">
+                  {category}
+                </h3>
+                <span className="text-[10px] font-medium tabular-nums text-muted-foreground/30">
+                  {items.length}
+                </span>
+              </div>
+
+              <div className="rounded-xl border border-border/50 bg-card shadow-sm overflow-hidden divide-y divide-border/20">
                 {items.map(e => {
                   const desc = DISPATCHER_MAP.get(e.func)?.description ?? (e.args || e.func);
                   return (
@@ -442,7 +557,7 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
         </div>
       )}
 
-      {/* Undo delete toast */}
+      {/* ── Undo delete toast ─────────────────────────────────────── */}
       {undoData && (
         <div className="fixed bottom-6 right-6 flex items-center gap-3 rounded-lg border border-border/60 bg-card px-4 py-3 shadow-lg z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
           <span className="text-sm text-muted-foreground">Binding removed</span>
@@ -452,7 +567,7 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
         </div>
       )}
 
-      {/* Add / Full-edit dialog */}
+      {/* ── Add / Edit dialog ──────────────────────────────────────── */}
       <BindingFormDialog
         open={dialogOpen}
         onOpenChange={handleDialogClose}
