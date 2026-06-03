@@ -1,10 +1,16 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Terminal, Settings2, Command } from "lucide-react";
+import { Terminal, Settings2, Command, SearchIcon } from "lucide-react";
+import {
+  useHotkeyRecorder,
+  parseHotkey,
+  formatForDisplay,
+} from "@tanstack/react-hotkeys";
 import type { SourceFile } from "@/lib/config-types";
 import type { KeybindEntry, KeybindFlags } from "@/lib/keybind-types";
+import { cn } from "@/lib/utils";
 import { bindKeyFromFlags, serializeModifiers, parseModifiers, getActiveModeAtEnd } from "@/lib/keybind-parse";
 import { DispatcherCombobox } from "./DispatcherCombobox";
 import { KeyCombobox } from "./KeyCombobox";
@@ -42,6 +48,181 @@ interface BindingFormDialogProps {
   existingModes: string[];
   allEntries: KeybindEntry[];
   editingEntry?: KeybindEntry | null;
+}
+
+// ── Key capture recorder ──
+
+interface KeyCaptureRecorderProps {
+  selectedMods: string[];
+  keyName: string;
+  onToggleMod: (mod: string) => void;
+  onKeyCaptured: (key: string) => void;
+}
+
+// Maps JS event.key names → XKB key names (from key-names.ts)
+const KEY_TO_XKB: Record<string, string> = {
+  " ": "Space",
+  "Enter": "Return",
+  "Escape": "Escape",
+  "Backspace": "BackSpace",
+  "Delete": "Delete",
+  "Insert": "Insert",
+  "Tab": "Tab",
+  "CapsLock": "Caps_Lock",
+  "NumLock": "Num_Lock",
+  "ScrollLock": "Scroll_Lock",
+  "PrintScreen": "Print",
+  "Pause": "Pause",
+  "Menu": "Menu",
+  "ArrowLeft": "Left",
+  "ArrowRight": "Right",
+  "ArrowUp": "Up",
+  "ArrowDown": "Down",
+  "Home": "Home",
+  "End": "End",
+  "PageUp": "Page_Up",
+  "PageDown": "Page_Down",
+  "Meta": "Super_L",
+  "Alt": "Alt_L",
+  "Control": "Control_L",
+  "Shift": "Shift_L",
+};
+
+function toXkbKey(parsedKey: string): string {
+  // Single uppercase letter → lowercase (XKB convention)
+  if (/^[A-Z]$/.test(parsedKey)) return parsedKey.toLowerCase();
+  // Known JS→XKB mapping
+  if (KEY_TO_XKB[parsedKey]) return KEY_TO_XKB[parsedKey];
+  return parsedKey;
+}
+
+function KeyCaptureRecorder({ selectedMods, keyName, onToggleMod, onKeyCaptured }: KeyCaptureRecorderProps) {
+  const [showBrowser, setShowBrowser] = useState(false);
+  const browserRef = useRef<HTMLDivElement>(null);
+
+  const recorder = useHotkeyRecorder({
+    onRecord: (hotkey) => {
+      const parsed = parseHotkey(hotkey);
+      const xkbKey = toXkbKey(parsed.key);
+      onKeyCaptured(xkbKey);
+    },
+  });
+
+  const displayKey = keyName ? formatForDisplay(keyName, { useSymbols: false }) : "";
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (browserRef.current && !browserRef.current.contains(e.target as Node))
+        setShowBrowser(false);
+    }
+    if (showBrowser) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showBrowser]);
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/10 p-4 space-y-4">
+      {/* ── Modifiers ── */}
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-2">
+          Modifiers
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {MODIFIERS.map((m) => (
+            <button
+              key={m}
+              onClick={() => onToggleMod(m)}
+              type="button"
+              aria-pressed={selectedMods.includes(m)}
+              className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border-b-4 active:border-b-0 active:translate-y-[4px] ${
+                selectedMods.includes(m)
+                  ? "bg-primary text-primary-foreground border-primary/60"
+                  : "bg-background border-border hover:bg-muted text-muted-foreground"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Key ── */}
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-2">
+          Key
+        </p>
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={recorder.isRecording ? undefined : recorder.startRecording}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") recorder.startRecording(); }}
+              className={cn(
+                "flex items-center gap-2 rounded-lg border px-3 py-2.5 transition-colors cursor-pointer select-none",
+                recorder.isRecording
+                  ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                  : keyName
+                    ? "border-border bg-background hover:border-border/80"
+                    : "border-dashed border-muted-foreground/30 bg-background hover:border-muted-foreground/50",
+              )}
+            >
+              {recorder.isRecording ? (
+                <>
+                  <span className="relative flex h-2 w-2 flex-shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+                  </span>
+                  <span className="text-xs text-muted-foreground flex-1">Press a key on your keyboard…</span>
+                  <kbd className="text-[10px] text-muted-foreground/50 border border-border rounded px-1">Esc to cancel</kbd>
+                </>
+              ) : keyName ? (
+                <>
+                  <kbd className="inline-flex items-center justify-center h-[26px] min-w-[26px] px-2 rounded-[5px] font-mono text-xs font-semibold leading-none border border-border bg-muted text-foreground select-none shadow-[0_1px_0_0_hsl(var(--border))]">
+                    {displayKey}
+                  </kbd>
+                  <span className="text-xs text-muted-foreground/50 ml-2">Click to change</span>
+                  <div className="flex-1" />
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted-foreground/30 shrink-0">
+                    <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                  </svg>
+                </>
+              ) : (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted-foreground/40 shrink-0" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
+                  </svg>
+                  <span className="text-xs text-muted-foreground/60 flex-1">Click to record key…</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Fallback: search all XKB keys (system-interceptable keys) */}
+          <div className="relative shrink-0" ref={browserRef}>
+            <button
+              type="button"
+              onClick={() => setShowBrowser((o) => !o)}
+              className="flex h-10 w-10 items-center justify-center rounded-lg border border-border/50 bg-background text-muted-foreground/40 hover:text-foreground hover:border-border transition-colors"
+              title="Browse all keys"
+            >
+              <SearchIcon className="size-4" />
+            </button>
+            {showBrowser && (
+              <div className="absolute right-0 top-[calc(100%+4px)] z-50 w-72">
+                <KeyCombobox
+                  value={keyName}
+                  onChange={(val) => {
+                    onKeyCaptured(val);
+                    setShowBrowser(false);
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function BindingFormDialog({
@@ -133,15 +314,11 @@ export function BindingFormDialog({
     onOpenChange(false);
   };
 
-  const toggleMod = (m: string) => {
-    setSelectedMods((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
-  };
-
   const hasConflict = conflicts.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl gap-8 p-8">
+      <DialogContent className="max-w-4xl sm:max-w-4xl gap-8 p-8">
         <DialogHeader className="gap-2">
           <DialogTitle className="text-2xl">
             {isEditing ? "Edit Shortcut" : "Create Shortcut"}
@@ -159,30 +336,14 @@ export function BindingFormDialog({
               <label className="text-sm font-semibold flex items-center gap-2">
                 <Command className="size-4 text-muted-foreground" /> Key Combination
               </label>
-              <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/10 p-4">
-                <div className="flex flex-wrap gap-2">
-                  {MODIFIERS.map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => toggleMod(m)}
-                      aria-pressed={selectedMods.includes(m)}
-                      className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border-b-4 active:border-b-0 active:translate-y-[4px] ${
-                        selectedMods.includes(m)
-                          ? "bg-primary text-primary-foreground border-primary/60"
-                          : "bg-background border-border hover:bg-muted text-muted-foreground"
-                      }`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-center gap-3 mt-2">
-                  <span className="text-xl font-mono text-muted-foreground/50 shrink-0">+</span>
-                  <div className="flex-1">
-                    <KeyCombobox value={key} onChange={setKey} />
-                  </div>
-                </div>
-              </div>
+              <KeyCaptureRecorder
+                selectedMods={selectedMods}
+                keyName={key}
+                onToggleMod={(m) =>
+                  setSelectedMods((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]))
+                }
+                onKeyCaptured={setKey}
+              />
             </div>
 
             <div className="space-y-3">
