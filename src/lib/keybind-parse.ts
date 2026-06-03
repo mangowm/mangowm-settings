@@ -99,6 +99,16 @@ export function parseKeybindingsFromFiles(files: SourceFile[]): KeybindEntry[] {
 
     // New entries added via addEntry have data values with no
     // corresponding lines — append them at the end.
+
+    // First, consume any remaining keymode values that were added
+    // via addEntry so currentMode is correct for the bindings below.
+    const kmConsumed = consumed["keymode"] ?? 0;
+    const kmValues = file.data["keymode"] ?? [];
+    for (let i = kmConsumed; i < kmValues.length; i++) {
+      currentMode = kmValues[i];
+    }
+
+    // Process remaining bind values now that currentMode is up to date.
     for (const key of Object.keys(file.data)) {
       if (!isBindKey(key)) continue;
       const dataValues = file.data[key] ?? [];
@@ -118,6 +128,110 @@ export function parseKeybindingsFromFiles(files: SourceFile[]): KeybindEntry[] {
   }
 
   return entries;
+}
+
+/**
+ * Returns the effective mode at the end of all loaded files by reading
+ * the last value from each file's data["keymode"] (which reflects
+ * mutations from addEntry).
+ *
+ * This is the mode context that new bindings appended via addEntry will
+ * inherit during the next re-parse.  Callers that need a different mode
+ * MUST insert a `keymode=` line before adding the binding.
+ */
+export function getActiveModeAtEnd(files: SourceFile[]): string {
+  let mode = "default";
+  for (const file of files) {
+    const modes = file.data["keymode"];
+    if (modes && modes.length > 0) {
+      mode = modes[modes.length - 1];
+    } else {
+      // Fallback: walk lines for pre-existing mode entries
+      for (const line of file.lines) {
+        if (line.type === "entry" && line.key === "keymode") {
+          mode = line.value;
+        }
+      }
+    }
+  }
+  return mode;
+}
+
+// ── Mode block boundary helpers ──────────────────────────────────────────────
+
+import type { ConfigLine } from "./config-types";
+
+/**
+ * Find the index of the last `keymode=<mode>` line in `lines`.
+ * If `mode` is omitted, finds the last `keymode=` line regardless of value.
+ * Returns -1 if not found.
+ */
+export function findLastKeymodeLine(lines: ConfigLine[], mode?: string): number {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const ln = lines[i];
+    if (ln.type === "entry" && ln.key === "keymode") {
+      if (mode === undefined || ln.value === mode) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Given the index of a `keymode=` line, return the index of the last line
+ * that belongs to that mode block — i.e. the line just before the next
+ * `keymode=` line, or the last line in the file.
+ */
+export function findBlockEnd(lines: ConfigLine[], keymodeIdx: number): number {
+  for (let i = keymodeIdx + 1; i < lines.length; i++) {
+    const ln = lines[i];
+    if (ln.type === "entry" && ln.key === "keymode") {
+      return i - 1;
+    }
+  }
+  return lines.length - 1;
+}
+
+/**
+ * Find the best place to insert a binding in `targetMode` so that it lands
+ * in the correct mode block.  Returns `{ fileIdx, afterLineIdx }` or `null`
+ * if the binding should simply be appended at the end.
+ *
+ * Rules:
+ *   - If `targetMode === "default"` and there are `keymode=` lines in the
+ *     file, insert before the very first `keymode=` (i.e. keep default
+ *     bindings at the top).
+ *   - If `targetMode` has an existing `keymode=` line, insert after the last
+ *     entry in that block.
+ *   - Otherwise return null (caller should append or create a new block).
+ */
+export function findInsertPosition(
+  lines: ConfigLine[],
+  fileIdx: number,
+  targetMode: string,
+): { fileIdx: number; afterLineIdx: number } | null {
+  if (targetMode === "default") {
+    // Default mode is implicit — no `keymode=default` line needed.
+    // Insert before the first `keymode=` to keep default binds at the top.
+    const firstKm = lines.findIndex(
+      (ln): ln is ConfigLine & { type: "entry" } => ln.type === "entry" && ln.key === "keymode",
+    );
+    if (firstKm >= 0) {
+      // Insert right before the first keymode line
+      return { fileIdx, afterLineIdx: firstKm - 1 };
+    }
+    // No keymode lines at all — everything is default, append at end.
+    return null;
+  }
+
+  // Non-default mode: find the last `keymode=<targetMode>` line
+  const kmIdx = findLastKeymodeLine(lines, targetMode);
+  if (kmIdx >= 0) {
+    const blockEnd = findBlockEnd(lines, kmIdx);
+    return { fileIdx, afterLineIdx: blockEnd };
+  }
+
+  // Mode block doesn't exist yet — caller should create it at end.
+  return null;
 }
 
 // ── Single binding parse / serialize ──

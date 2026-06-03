@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { temporal } from "zundo";
 import { readAllConfigFiles, writeAllConfigFiles, reloadMango } from "./config-file";
-import type { ConfigData, SourceFile } from "./config-types";
+import type { ConfigData, ConfigLine, SourceFile } from "./config-types";
 
 // `data` is the merged view across all files (UI reads this).
 // `files` is the authoritative source (written to disk).
@@ -78,6 +78,11 @@ interface ConfigStore {
   // Multi-value list ops: use for keys where every line is a distinct entry
   // (bind=, exec-once=, env=, …).
   addEntry: (key: string, value: string) => void;
+  /** Insert a new entry at a specific line position in a specific file.
+   *  The new ConfigLine is spliced into `lines` at `afterLineIdx + 1` and
+   *  its value is inserted at the corresponding index in `data[key]` so
+   *  that serializeConfig emits it in the right order. */
+  insertEntry: (key: string, value: string, options: { fileIdx: number; afterLineIdx: number }) => void;
   updateEntry: (key: string, index: number, value: string) => void;
   removeEntry: (key: string, index: number) => void;
 }
@@ -158,6 +163,45 @@ export const useConfigStore = create<ConfigStore>()(
           return { files, data: mergeFileData(files), dirty: true };
         }),
 
+      insertEntry: (key, value, { fileIdx, afterLineIdx }) =>
+        set((state) => {
+          const file = state.files[fileIdx];
+          if (!file) return state;
+
+          // 1. Insert new ConfigLine into lines at afterLineIdx + 1
+          const newLine: ConfigLine = {
+            type: "entry",
+            key,
+            value,
+            raw: `${key} = ${value}`,
+          };
+          const newLines = [...file.lines];
+          newLines.splice(afterLineIdx + 1, 0, newLine);
+
+          // 2. Count how many values of this key appear before the
+          //    insertion point in the updated lines array
+          const insertPos = afterLineIdx + 1;
+          let keyCount = 0;
+          for (let i = 0; i < insertPos; i++) {
+            const ln = newLines[i];
+            if (ln.type === "entry" && ln.key === key) keyCount++;
+          }
+
+          // 3. Splice the value into data[key] at keyCount
+          const current = file.data[key] ?? [];
+          const newData = [...current];
+          newData.splice(keyCount, 0, value);
+
+          // 4. Patch the file
+          const files = state.files.map((f, i) =>
+            i === fileIdx
+              ? { ...f, lines: newLines, data: { ...f.data, [key]: newData } }
+              : f,
+          );
+
+          return { files, data: mergeFileData(files), dirty: true };
+        }),
+
       updateEntry: (key, index, value) =>
         set((state) => {
           const target = resolveGlobalIndex(state.files, key, index);
@@ -175,15 +219,38 @@ export const useConfigStore = create<ConfigStore>()(
         set((state) => {
           const target = resolveGlobalIndex(state.files, key, index);
           if (!target) return state;
-          const files = patchFile(state.files, target.fileIdx, (prev) => {
-            const current = prev[key] ?? [];
-            const next = current.filter((_, i) => i !== target.localIdx);
+
+          const files = state.files.map((f, i) => {
+            if (i !== target.fileIdx) return f;
+
+            // 1. Remove value from data at localIdx
+            const current = f.data[key] ?? [];
+            const next = current.filter((_, j) => j !== target.localIdx);
+            let newData: ConfigData;
             if (next.length === 0) {
-              const { [key]: _dropped, ...rest } = prev;
-              return rest;
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              const { [key]: _dropped, ...rest } = f.data;
+              newData = rest;
+            } else {
+              newData = { ...f.data, [key]: next };
             }
-            return { ...prev, [key]: next };
+
+            // 2. Remove the corresponding entry line from lines so that
+            //    serializeConfig doesn't have a ghost line that steals the
+            //    value intended for a newly inserted entry (critical for
+            //    keybinding mode-block placement).
+            let lineCount = -1;
+            const newLines = f.lines.filter((ln) => {
+              if (ln.type === "entry" && ln.key === key) {
+                lineCount++;
+                return lineCount !== target.localIdx;
+              }
+              return true;
+            });
+
+            return { ...f, data: newData, lines: newLines };
           });
+
           return { files, data: mergeFileData(files), dirty: true };
         }),
     }),

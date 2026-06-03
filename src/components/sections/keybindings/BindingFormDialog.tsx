@@ -17,7 +17,7 @@ import { xkbToDisplay } from "@/lib/key-name-map";
 import type { SourceFile } from "@/lib/config-types";
 import type { KeybindEntry, KeybindFlags } from "@/lib/keybind-types";
 import { cn } from "@/lib/utils";
-import { bindKeyFromFlags, serializeModifiers, parseModifiers } from "@/lib/keybind-parse";
+import { bindKeyFromFlags, serializeModifiers, parseModifiers, findInsertPosition } from "@/lib/keybind-parse";
 import { DispatcherCombobox } from "./DispatcherCombobox";
 import { KeyCombobox } from "./KeyCombobox";
 import type { DispatcherArg } from "@/lib/dispatchers";
@@ -249,7 +249,7 @@ function ArgField({ arg, value, error, onChange }: ArgFieldProps) {
 interface BindingFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  addEntry: (key: string, value: string) => void;
+  insertEntry: (key: string, value: string, options: { fileIdx: number; afterLineIdx: number }) => void;
   updateEntry: (key: string, index: number, value: string) => void;
   removeEntry: (key: string, index: number) => void;
   files: SourceFile[];
@@ -261,7 +261,7 @@ interface BindingFormDialogProps {
 export function BindingFormDialog({
   open,
   onOpenChange,
-  addEntry,
+  insertEntry,
   updateEntry,
   removeEntry,
   files,
@@ -391,33 +391,35 @@ export function BindingFormDialog({
     return findConflicts(allEntries, configKey, mode, modString, key.trim(), resolvedEditing);
   }, [allEntries, configKey, mode, modString, key, resolvedEditing]);
 
-  // Returns true if the given mode name already has at least one
-  // `keymode=` declaration anywhere in the loaded config files.
-  // This prevents inserting duplicate `keymode=resize` lines when the
-  // user adds multiple bindings to the same mode block.
-  const modeExistsInFiles = useCallback(
-    (mode: string): boolean => {
-      for (const file of files) {
-        const modes = file.data["keymode"];
-        if (modes && modes.some((m) => m === mode)) return true;
-      }
-      return false;
-    },
-    [files],
-  );
-
   const addModeAwareEntry = useCallback(
     (configKey: string, value: string) => {
-      // Only emit a `keymode=` directive if the target mode has never
-      // been declared before.  If it already exists, the binding's mode
-      // context is inferred from the nearest preceding `keymode=` line
-      // and tracked in KeybindEntry.mode for the UI.
-      if (!modeExistsInFiles(mode)) {
-        addEntry("keymode", mode);
+      // Find the target file for this binding key
+      const fileIdx = files.findIndex((f) => configKey in f.data);
+      const targetFileIdx = fileIdx === -1 ? 0 : fileIdx;
+      const lines = files[targetFileIdx]?.lines ?? [];
+
+      // Default mode: insert before first keymode= or append at end.
+      // Non-default with existing block: insert after last entry in block.
+      const pos = findInsertPosition(lines, targetFileIdx, mode);
+      if (pos) {
+        insertEntry(configKey, value, pos);
+        return;
       }
-      addEntry(configKey, value);
+
+      // No suitable position found — create a new mode block at end of file.
+      // Use insertEntry so the keymode= line is SERIALIZED before the bind
+      // (addEntry only touches data, and remaining-values emit in object
+      // insertion order, which puts bind before keymode).
+      const targetFile = files[targetFileIdx];
+      const lastLineIdx = targetFile ? targetFile.lines.length - 1 : 0;
+      if (mode !== "default") {
+        insertEntry("keymode", mode, { fileIdx: targetFileIdx, afterLineIdx: lastLineIdx });
+        insertEntry(configKey, value, { fileIdx: targetFileIdx, afterLineIdx: lastLineIdx + 1 });
+      } else {
+        insertEntry(configKey, value, { fileIdx: targetFileIdx, afterLineIdx: lastLineIdx });
+      }
     },
-    [mode, modeExistsInFiles, addEntry],
+    [mode, files, insertEntry],
   );
 
   const handleSubmit = () => {

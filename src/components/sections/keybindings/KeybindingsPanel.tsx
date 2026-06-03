@@ -13,6 +13,7 @@ import {
   parseKeybindingsFromFiles,
   serializeBindingEntry,
   parseModifiers,
+  findInsertPosition,
 } from "@/lib/keybind-parse";
 import { xkbToDisplay } from "@/lib/key-name-map";
 import type { PanelProps } from "@/lib/section-types";
@@ -190,6 +191,7 @@ function BindingRow({
 interface UndoData {
   key: string;
   value: string;
+  mode: string;
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -197,7 +199,7 @@ interface UndoData {
 export function KeybindingsPanel({ focusKey }: PanelProps) {
   const fieldRef = useFocusField(focusKey);
   const files = useConfigStore((s) => s.files);
-  const addEntry = useConfigStore((s) => s.addEntry);
+  const insertEntry = useConfigStore((s) => s.insertEntry);
   const updateEntry = useConfigStore((s) => s.updateEntry);
   const removeEntry = useConfigStore((s) => s.removeEntry);
 
@@ -251,15 +253,34 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
     setUndoData({
       key: entry.configKey,
       value: serializeBindingEntry(entry),
+      mode: entry.mode,
     });
   }, [removeEntry]);
 
   const handleUndoDelete = useCallback(() => {
     if (!undoData) return;
-    const { key, value } = undoData;
-    addEntry(key, value);
+    const { key, value, mode } = undoData;
+    const fileIdx = files.findIndex((f) => key in f.data);
+    const targetFileIdx = fileIdx === -1 ? 0 : fileIdx;
+    const lines = files[targetFileIdx]?.lines ?? [];
+
+    // Try to restore the binding in its original mode block.
+    const pos = findInsertPosition(lines, targetFileIdx, mode);
+    if (pos) {
+      insertEntry(key, value, pos);
+    } else {
+      // Fall back: create a new mode block at end.
+      const targetFile = files[targetFileIdx];
+      const lastLineIdx = targetFile ? targetFile.lines.length - 1 : 0;
+      if (mode !== "default") {
+        insertEntry("keymode", mode, { fileIdx: targetFileIdx, afterLineIdx: lastLineIdx });
+        insertEntry(key, value, { fileIdx: targetFileIdx, afterLineIdx: lastLineIdx + 1 });
+      } else {
+        insertEntry(key, value, { fileIdx: targetFileIdx, afterLineIdx: lastLineIdx });
+      }
+    }
     setUndoData(null);
-  }, [undoData, addEntry]);
+  }, [undoData, files, insertEntry]);
 
   // Auto-dismiss undo toast
   useEffect(() => {
@@ -435,7 +456,7 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
       <BindingFormDialog
         open={dialogOpen}
         onOpenChange={handleDialogClose}
-        addEntry={addEntry}
+        insertEntry={insertEntry}
         updateEntry={updateEntry}
         removeEntry={removeEntry}
         files={files}
