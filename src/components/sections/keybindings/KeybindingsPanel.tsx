@@ -11,7 +11,6 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useConfigStore } from "@/lib/config-store";
 import {
   parseKeybindingsFromFiles,
-  getActiveModeAtEnd,
   serializeBindingEntry,
   parseModifiers,
 } from "@/lib/keybind-parse";
@@ -191,7 +190,6 @@ function BindingRow({
 interface UndoData {
   key: string;
   value: string;
-  mode: string;
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -253,19 +251,15 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
     setUndoData({
       key: entry.configKey,
       value: serializeBindingEntry(entry),
-      mode: entry.mode,
     });
   }, [removeEntry]);
 
   const handleUndoDelete = useCallback(() => {
     if (!undoData) return;
-    const { key, value, mode } = undoData;
-    if (mode !== getActiveModeAtEnd(files)) {
-      addEntry("keymode", mode);
-    }
+    const { key, value } = undoData;
     addEntry(key, value);
     setUndoData(null);
-  }, [undoData, files, addEntry]);
+  }, [undoData, addEntry]);
 
   // Auto-dismiss undo toast
   useEffect(() => {
@@ -410,10 +404,9 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
               <div className="rounded-xl border border-border overflow-hidden">
                 {items.map(e => {
                   const desc = DISPATCHER_MAP.get(e.func)?.description ?? (e.args || e.func);
-                  const ek = `${e.configKey}[${e.configIndex}]`;
                   return (
                     <BindingRow
-                      key={ek}
+                      key={e.id}
                       entry={e}
                       label={e.func}
                       description={desc}

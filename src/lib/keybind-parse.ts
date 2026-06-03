@@ -1,6 +1,27 @@
 import type { ConfigData } from "./config-types";
 import type { SourceFile } from "./config-types";
-import type { KeybindEntry, KeybindFlags } from "./keybind-types";
+import type { EntryId, KeybindEntry, KeybindFlags } from "./keybind-types";
+
+/**
+ * Deterministic hash of the fields that define a binding.
+ * Same inputs → same id, across mounts / re-parses / file boundaries.
+ */
+export function makeEntryId(
+  configKey: string,
+  mode: string,
+  mods: string,
+  key: string,
+  func: string,
+  args: string,
+): EntryId {
+  let h = 5381;
+  const s = `${configKey}|${mode}|${mods}|${key}|${func}|${args}`;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) + s.charCodeAt(i);
+    h = h & h;
+  }
+  return (h >>> 0).toString(36);
+}
 
 const BIND_KEY_RE = /^bind[slrp]*$/;
 
@@ -18,7 +39,10 @@ export function parseKeybindings(data: ConfigData): KeybindEntry[] {
     const values = data[key];
     for (let i = 0; i < values.length; i++) {
       const entry = parseSingleBinding(key, i, values[i]);
-      if (entry) entries.push(entry);
+      if (entry) {
+        entry.id = makeEntryId(entry.configKey, entry.mode, entry.mods, entry.key, entry.func, entry.args);
+        entries.push(entry);
+      }
     }
   }
 
@@ -62,6 +86,7 @@ export function parseKeybindingsFromFiles(files: SourceFile[]): KeybindEntry[] {
         const entry = parseSingleBinding(key, idx, value);
         if (entry) {
           entry.mode = currentMode;
+          entry.id = makeEntryId(entry.configKey, entry.mode, entry.mods, entry.key, entry.func, entry.args);
           entries.push(entry);
         }
         consumed[key] = localIdx + 1;
@@ -83,6 +108,7 @@ export function parseKeybindingsFromFiles(files: SourceFile[]): KeybindEntry[] {
         const entry = parseSingleBinding(key, idx, dataValues[localIdx]);
         if (entry) {
           entry.mode = currentMode;
+          entry.id = makeEntryId(entry.configKey, entry.mode, entry.mods, entry.key, entry.func, entry.args);
           entries.push(entry);
         }
         globalIdx[key] = idx + 1;
@@ -92,27 +118,6 @@ export function parseKeybindingsFromFiles(files: SourceFile[]): KeybindEntry[] {
   }
 
   return entries;
-}
-
-export function getActiveModeAtEnd(files: SourceFile[]): string {
-  // Walk files in order; for each file, take the last value from
-  // data["keymode"] (which reflects mutations). Fall back to lines
-  // only if data["keymode"] is missing or empty.
-  let mode = "default";
-  for (const file of files) {
-    const modes = file.data["keymode"];
-    if (modes && modes.length > 0) {
-      mode = modes[modes.length - 1];
-    } else {
-      // Fallback: walk lines for pre-existing mode entries
-      for (const line of file.lines) {
-        if (line.type === "entry" && line.key === "keymode") {
-          mode = line.value;
-        }
-      }
-    }
-  }
-  return mode;
 }
 
 // ── Single binding parse / serialize ──
@@ -125,7 +130,8 @@ export function parseSingleBinding(
   const parts = value.split(",");
   if (parts.length < 3) return null;
 
-  return {
+  const entry: KeybindEntry = {
+    id: "",  // re-computed by caller with actual mode
     configKey,
     configIndex,
     raw: value,
@@ -136,6 +142,7 @@ export function parseSingleBinding(
     args: parts.slice(3).join(","),
     flags: parseFlagsFromKey(configKey),
   };
+  return entry;
 }
 
 export function serializeBindingEntry(entry: KeybindEntry): string {

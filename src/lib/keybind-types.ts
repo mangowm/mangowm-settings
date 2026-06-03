@@ -5,7 +5,14 @@ export interface KeybindFlags {
   pass: boolean;
 }
 
+/** Deterministic content-hash of (configKey, mode, mods, key, func, args).
+ *  Same values → same id. Used for stable React keys and conflict
+ *  self-comparison across re-parses. */
+export type EntryId = string;
+
 export interface KeybindEntry {
+  /** Stable identity — survives index shifts from insert/delete */
+  id: EntryId;
   configKey: string;
   configIndex: number;
   raw: string;

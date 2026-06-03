@@ -42,33 +42,45 @@ export function parseConfig(text: string): ParsedConfig {
 
 /**
  * Serializes back to text, preserving original line order.
- * Walks the original lines; for each entry line consumes the next value
- * from a per-key FIFO buffer. Remaining values (new additions) are
- * appended at the end. Dropped keys cause their lines to be removed.
+ *
+ * Walks the original lines; for each entry line, emits the next
+ * unconsumed value from data[key] via a per-key cursor.
+ * Entries whose key no longer exists in data are silently dropped
+ * (their line is omitted).
+ * Remaining values (new entries added via addEntry that have no
+ * corresponding original line) are appended at the end.
+ *
+ * This function is idempotent — calling it multiple times with the
+ * same (data, lines) produces identical output because it never
+ * mutates its inputs.
  */
 export function serializeConfig({ data, lines }: ParsedConfig): string {
-  const buffer = new Map<string, string[]>();
-  for (const [key, values] of Object.entries(data)) {
-    buffer.set(key, [...values]);
-  }
-
+  const consumed = new Map<string, number>();
   const out: string[] = [];
 
+  // First pass: walk original lines, populating each from its
+  // data[key] slot in declaration order.
   for (const line of lines) {
     if (line.type !== "entry") {
       out.push(line.raw);
       continue;
     }
 
-    const queue = buffer.get(line.key);
-    if (!queue || queue.length === 0) continue;
-
-    out.push(`${line.key} = ${queue.shift()}`);
+    const values = data[line.key];
+    const c = consumed.get(line.key) ?? 0;
+    if (values && c < values.length) {
+      out.push(`${line.key} = ${values[c]}`);
+      consumed.set(line.key, c + 1);
+    }
+    // else: entry was removed from data — drop the line silently
   }
 
-  for (const [key, remaining] of buffer) {
-    for (const value of remaining) {
-      out.push(`${key} = ${value}`);
+  // Second pass: append any values that were added via addEntry /
+  // setValue / setValues and have no corresponding original line.
+  for (const [key, values] of Object.entries(data)) {
+    const c = consumed.get(key) ?? 0;
+    for (let i = c; i < values.length; i++) {
+      out.push(`${key} = ${values[i]}`);
     }
   }
 

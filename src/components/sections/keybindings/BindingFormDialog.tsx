@@ -8,13 +8,16 @@ import { xkbToDisplay } from "@/lib/key-name-map";
 import type { SourceFile } from "@/lib/config-types";
 import type { KeybindEntry, KeybindFlags } from "@/lib/keybind-types";
 import { cn } from "@/lib/utils";
-import { bindKeyFromFlags, serializeModifiers, parseModifiers, getActiveModeAtEnd } from "@/lib/keybind-parse";
+import { bindKeyFromFlags, serializeModifiers, parseModifiers } from "@/lib/keybind-parse";
 import { DispatcherCombobox } from "./DispatcherCombobox";
 import { KeyCombobox } from "./KeyCombobox";
 
 const MODIFIERS = ["super", "ctrl", "alt", "shift"];
 const MODIFIER_ORDER = ["super", "ctrl", "alt", "shift"];
 
+/** Conflict candidates: entries sharing the same (configKey, mode, mods, key)
+ *  but with a different identity than the entry currently being edited.
+ *  Uses stable `id` for self-comparison, immune to index shifts. */
 function findConflicts(
   allEntries: KeybindEntry[],
   configKey: string,
@@ -24,13 +27,7 @@ function findConflicts(
   editingEntry?: KeybindEntry | null,
 ): KeybindEntry[] {
   return allEntries.filter((e) => {
-    if (
-      editingEntry &&
-      e.configKey === editingEntry.configKey &&
-      e.configIndex === editingEntry.configIndex
-    ) {
-      return false;
-    }
+    if (editingEntry && e.id === editingEntry.id) return false;
     return e.configKey === configKey && e.mode === mode && e.mods === mods && e.key === key;
   });
 }
@@ -128,19 +125,46 @@ export function BindingFormDialog({
     return serializeModifiers(sorted);
   }, [selectedMods]);
 
+  // Re-resolve the editing entry from the current allEntries by stable
+  // id so that index shifts from concurrent panel edits don't corrupt
+  // the conflict check or the submission target.
+  const resolvedEditing = useMemo(() => {
+    if (!editingEntry) return null;
+    return allEntries.find((e) => e.id === editingEntry.id) ?? null;
+  }, [allEntries, editingEntry]);
+
   const conflicts = useMemo(() => {
     if (!key.trim()) return [];
-    return findConflicts(allEntries, configKey, mode, modString, key.trim(), editingEntry);
-  }, [allEntries, configKey, mode, modString, key, editingEntry]);
+    return findConflicts(allEntries, configKey, mode, modString, key.trim(), resolvedEditing);
+  }, [allEntries, configKey, mode, modString, key, resolvedEditing]);
+
+  // Returns true if the given mode name already has at least one
+  // `keymode=` declaration anywhere in the loaded config files.
+  // This prevents inserting duplicate `keymode=resize` lines when the
+  // user adds multiple bindings to the same mode block.
+  const modeExistsInFiles = useCallback(
+    (mode: string): boolean => {
+      for (const file of files) {
+        const modes = file.data["keymode"];
+        if (modes && modes.some((m) => m === mode)) return true;
+      }
+      return false;
+    },
+    [files],
+  );
 
   const addModeAwareEntry = useCallback(
     (configKey: string, value: string) => {
-      if (mode !== getActiveModeAtEnd(files)) {
+      // Only emit a `keymode=` directive if the target mode has never
+      // been declared before.  If it already exists, the binding's mode
+      // context is inferred from the nearest preceding `keymode=` line
+      // and tracked in KeybindEntry.mode for the UI.
+      if (!modeExistsInFiles(mode)) {
         addEntry("keymode", mode);
       }
       addEntry(configKey, value);
     },
-    [mode, files, addEntry],
+    [mode, modeExistsInFiles, addEntry],
   );
 
   const handleSubmit = () => {
@@ -148,14 +172,17 @@ export function BindingFormDialog({
 
     const value = [modString, key.trim(), func.trim(), args.trim()].filter(Boolean).join(",");
 
-    if (editingEntry) {
-      const keyChanged = configKey !== editingEntry.configKey;
-      const modeChanged = mode !== editingEntry.mode;
+    // Use the re-resolved entry (stable id lookup) so that index
+    // shifts from concurrent panel edits don't corrupt the target.
+    const target = resolvedEditing ?? editingEntry;
+    if (target) {
+      const keyChanged = configKey !== target.configKey;
+      const modeChanged = mode !== target.mode;
       if (keyChanged || modeChanged) {
-        removeEntry(editingEntry.configKey, editingEntry.configIndex);
+        removeEntry(target.configKey, target.configIndex);
         addModeAwareEntry(configKey, value);
       } else {
-        updateEntry(editingEntry.configKey, editingEntry.configIndex, value);
+        updateEntry(target.configKey, target.configIndex, value);
       }
     } else {
       addModeAwareEntry(configKey, value);
