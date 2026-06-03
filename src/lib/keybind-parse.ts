@@ -123,7 +123,7 @@ export function parseFlagsFromKey(key: string): KeybindFlags {
 
 export function parseModifiers(modStr: string): string[] {
   if (!modStr || modStr.toLowerCase() === "none") return [];
-  return modStr.split("+").filter(Boolean);
+  return modStr.split("+").map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
 
 export function serializeModifiers(mods: string[]): string {

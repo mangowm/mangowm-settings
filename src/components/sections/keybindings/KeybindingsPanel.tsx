@@ -1,16 +1,10 @@
 /**
  * KeybindingsPanel
  *
- * Merges HEAD's config-store data layer with the working tree's
- * inline key-recorder UI/UX.
- *
- * Data:  reads from useConfigStore / actual config files via
- *        parseKeybindingsFromFiles, persists via addEntry/updateEntry/
- *        removeEntry, undo/redo via zundo temporal store.
- * UI:    inline KeyRecorder for quick combo edits, BindingRow with
- *        ComboDisplay badges, category tabs (derived from dispatcher
- *        categories), search, per-binding reset, modified badges,
- *        conflict detection, full CRUD via BindingFormDialog.
+ * Lists all keyboard bindings with category filtering, search, conflict
+ * detection, per-binding reset, and a full CRUD dialog for editing.
+ * Combo editing uses the dialog's modifier buttons (interception-safe)
+ * + useKeyRecorder for key-only capture — no inline recorder.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -22,54 +16,26 @@ import {
   serializeModifiers,
   parseModifiers,
 } from "@/lib/keybind-parse";
+import { xkbToDisplay } from "@/lib/key-name-map";
 import type { PanelProps } from "@/lib/section-types";
 import type { KeybindEntry } from "@/lib/keybind-types";
 import { useFocusField } from "@/lib/use-focus-field";
 import { DISPATCHER_MAP } from "@/lib/dispatchers";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Plus, Trash2, Settings2, Search } from "lucide-react";
+import { Plus, Trash2, Search } from "lucide-react";
 import { BindingFormDialog } from "./BindingFormDialog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+// KeyCombo mirrors the combo shape used throughout the panel for
+// entry↔combo conversions.
 interface KeyCombo {
   key: string;
-  ctrl?: boolean;
-  alt?: boolean;
-  shift?: boolean;
-  super?: boolean;
-}
-
-// ─── JS → XKB key name mapping ──────────────────────────────────────────────
-
-function normalizeKeyName(jsKey: string): string {
-  const map: Record<string, string> = {
-    "Enter": "Return",
-    " ": "space",
-    "ArrowLeft": "Left",
-    "ArrowRight": "Right",
-    "ArrowUp": "Up",
-    "ArrowDown": "Down",
-    "Escape": "Escape",
-    "Backspace": "BackSpace",
-    "Delete": "Delete",
-    "Insert": "Insert",
-    "Home": "Home",
-    "End": "End",
-    "PageUp": "Page_Up",
-    "PageDown": "Page_Down",
-    "Tab": "Tab",
-    "CapsLock": "Caps_Lock",
-    "NumLock": "Num_Lock",
-    "ScrollLock": "Scroll_Lock",
-    "PrintScreen": "Print",
-    "Pause": "Pause",
-    "Menu": "Menu",
-    "Super_L": "Super_L",
-    "Super_R": "Super_R",
-  };
-  return map[jsKey] ?? jsKey;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+  super: boolean;
 }
 
 // ─── Category mapping ───────────────────────────────────────────────────────
@@ -108,67 +74,23 @@ function comboToMods(combo: KeyCombo): string {
   return serializeModifiers(parts);
 }
 
-// ─── Display helpers (from working tree) ────────────────────────────────────
-
-
-
-function friendlyKey(key: string): string {
-  const map: Record<string, string> = {
-    " ": "Space", "ArrowLeft": "←", "ArrowRight": "→",
-    "ArrowUp": "↑", "ArrowDown": "↓", "Return": "Enter",
-    "Escape": "Esc", "minus": "−", "equal": "=",
-    "bracketleft": "[", "bracketright": "]",
-    "semicolon": ";", "apostrophe": "'",
-    "comma": ",", "period": ".", "slash": "/",
-    "backslash": "\\", "grave": "`",
-    "Delete": "Del", "BackSpace": "Bcksp",
-    "Print": "PrtSc", "Left": "←", "Right": "→",
-    "Up": "↑", "Down": "↓", "space": "Space",
-  };
-  return map[key] ?? (key.length === 1 ? key.toUpperCase() : key);
-}
+// ─── Combo comparison ────────────────────────────────────────────────────────
 
 function combosMatch(a: KeyCombo | null, b: KeyCombo | null): boolean {
   if (a === null && b === null) return true;
   if (!a || !b) return false;
-  return a.key === b.key && !!a.ctrl === !!b.ctrl && !!a.alt === !!b.alt
-    && !!a.shift === !!b.shift && !!a.super === !!b.super;
-}
-
-function comboFromEvent(e: KeyboardEvent): KeyCombo | null {
-  const ignored = new Set([
-    "Control", "Alt", "Shift", "Meta", "Super_L", "Super_R",
-    "Hyper_L", "Hyper_R", "CapsLock", "NumLock", "ScrollLock",
-  ]);
-  if (ignored.has(e.key)) return null;
-  return {
-    key: normalizeKeyName(e.key),
-    ctrl:  e.ctrlKey  || undefined,
-    alt:   e.altKey   || undefined,
-    shift: e.shiftKey || undefined,
-    super: e.metaKey  || undefined,
-  };
+  return (
+    a.key === b.key &&
+    !!a.ctrl === !!b.ctrl &&
+    !!a.alt === !!b.alt &&
+    !!a.shift === !!b.shift &&
+    !!a.super === !!b.super
+  );
 }
 
 // ─── Conflict helper ────────────────────────────────────────────────────────
 
-function findEntryConflicts(
-  allEntries: KeybindEntry[],
-  entry: KeybindEntry,
-  mods: string,
-  key: string,
-): KeybindEntry[] {
-  return allEntries.filter((e) => {
-    if (
-      e.configKey === entry.configKey &&
-      e.configIndex === entry.configIndex &&
-      e.mode === entry.mode
-    ) {
-      return false; // skip self
-    }
-    return e.configKey === entry.configKey && e.mode === entry.mode && e.mods === mods && e.key === key;
-  });
-}
+
 
 // ─── KeyBadge ─────────────────────────────────────────────────────────────────
 
@@ -189,7 +111,7 @@ function KeyBadge({ label }: { label: string }) {
 // ─── ComboDisplay ─────────────────────────────────────────────────────────────
 
 function ComboDisplay({ combo }: { combo: KeyCombo | null }) {
-  if (!combo) {
+  if (!combo || !combo.key) {
     return <span className="text-xs text-muted-foreground/50 italic">Unbound</span>;
   }
   const parts: string[] = [];
@@ -197,7 +119,7 @@ function ComboDisplay({ combo }: { combo: KeyCombo | null }) {
   if (combo.alt)   parts.push("Alt");
   if (combo.shift) parts.push("Shift");
   if (combo.super) parts.push("Super");
-  parts.push(friendlyKey(combo.key));
+  parts.push(xkbToDisplay(combo.key));
 
   return (
     <span className="inline-flex items-center gap-1">
@@ -213,144 +135,6 @@ function ComboDisplay({ combo }: { combo: KeyCombo | null }) {
   );
 }
 
-// ─── KeyRecorder ──────────────────────────────────────────────────────────────
-
-interface KeyRecorderProps {
-  value: KeyCombo | null;
-  onRecorded: (combo: KeyCombo | null) => void;
-  onCancel: () => void;
-  conflict?: string;
-}
-
-function KeyRecorder({ value, onRecorded, onCancel, conflict }: KeyRecorderProps) {
-  const [recording, setRecording] = useState(false);
-  const [pending, setPending] = useState<KeyCombo | null>(value);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const startRecording = useCallback(() => {
-    setRecording(true);
-    setPending(null);
-    setTimeout(() => inputRef.current?.focus(), 0);
-  }, []);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (e.key === "Escape") {
-      setRecording(false);
-      setPending(value);
-      onCancel();
-      return;
-    }
-
-    const combo = comboFromEvent(e.nativeEvent);
-    if (combo) {
-      setPending(combo);
-      setRecording(false);
-    }
-  }, [value, onCancel]);
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className={cn(
-        "flex items-center gap-2 rounded-lg border px-3 py-2 transition-colors",
-        "min-w-[220px]",
-        recording
-          ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-          : "border-border bg-background",
-      )}>
-        {recording ? (
-          <>
-            <span className="relative flex h-2 w-2 flex-shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-            </span>
-            <span className="text-xs text-muted-foreground flex-1">Press keys…</span>
-            <kbd className="text-[10px] text-muted-foreground/50 border border-border rounded px-1">Esc to cancel</kbd>
-          </>
-        ) : pending ? (
-          <>
-            <ComboDisplay combo={pending} />
-            <div className="flex-1" />
-          </>
-        ) : (
-          <span className="text-xs text-muted-foreground/50 italic flex-1">Unbound</span>
-        )}
-
-        {/* Hidden input that captures key events during recording */}
-        <input
-          ref={inputRef}
-          className="sr-only"
-          aria-label="Key recorder input"
-          onKeyDown={handleKeyDown}
-          onBlur={() => { if (recording) { setRecording(false); setPending(value); }}}
-          readOnly
-        />
-      </div>
-
-      {conflict && !recording && (
-        <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-          Conflicts with <span className="font-medium">{conflict}</span>
-        </p>
-      )}
-
-      <div className="flex items-center gap-2">
-        {!recording && (
-          <button
-            onClick={startRecording}
-            className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium",
-              "border border-border bg-background hover:bg-muted transition-colors",
-              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-            )}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
-            </svg>
-            {pending ? "Re-record" : "Record"}
-          </button>
-        )}
-        {pending && !recording && (
-          <button
-            onClick={() => { setPending(null); }}
-            className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium",
-              "border border-border text-muted-foreground hover:bg-muted transition-colors",
-              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-            )}
-          >
-            Unbind
-          </button>
-        )}
-        <div className="flex-1" />
-        <button
-          onClick={() => onCancel()}
-          className={cn(
-            "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium",
-            "border border-border text-muted-foreground hover:bg-muted transition-colors",
-          )}
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => onRecorded(pending)}
-          className={cn(
-            "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium",
-            "bg-primary text-primary-foreground hover:bg-primary/90 transition-colors",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          )}
-        >
-          Save
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ─── BindingRow ───────────────────────────────────────────────────────────────
 
 interface BindingRowProps {
@@ -358,14 +142,9 @@ interface BindingRowProps {
   label: string;
   description: string;
   originalCombo: KeyCombo | null;
-  isEditing: boolean;
-  conflict?: string;
   onEdit: () => void;
-  onSave: (combo: KeyCombo | null) => void;
-  onCancelEdit: () => void;
   onReset: () => void;
   onDelete: () => void;
-  onFullEdit: () => void;
 }
 
 function BindingRow({
@@ -373,25 +152,18 @@ function BindingRow({
   label,
   description,
   originalCombo,
-  isEditing,
-  conflict,
   onEdit,
-  onSave,
-  onCancelEdit,
   onReset,
   onDelete,
-  onFullEdit,
 }: BindingRowProps) {
-  const currentCombo = entryToCombo(entry);
+  const currentCombo = useMemo(() => entryToCombo(entry), [entry]);
   const isModified = !combosMatch(currentCombo, originalCombo);
 
   return (
     <div className={cn(
       "group grid gap-x-6 gap-y-1 px-4 py-3 transition-colors",
       "border-b border-border/50 last:border-0",
-      isEditing
-        ? "bg-muted/40"
-        : "hover:bg-muted/30",
+      "hover:bg-muted/30",
     )}
     style={{ gridTemplateColumns: "1fr auto" }}
     >
@@ -416,81 +188,56 @@ function BindingRow({
 
       {/* Controls */}
       <div className="flex items-center gap-1">
-        {!isEditing ? (
-          <>
-            <button
-              onClick={onEdit}
-              aria-label={`Edit keybinding for ${label}`}
-              className={cn(
-                "flex items-center gap-2 rounded-md px-2 py-1 transition-colors",
-                "hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              )}
-            >
-              <ComboDisplay combo={currentCombo} />
-              <svg
-                width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" aria-hidden="true"
-                className="text-muted-foreground/30 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-              >
-                <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
-              </svg>
-            </button>
+        <button
+          onClick={onEdit}
+          aria-label={`Edit keybinding for ${label}`}
+          className={cn(
+            "flex items-center gap-2 rounded-md px-2 py-1 transition-colors",
+            "hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          )}
+        >
+          <ComboDisplay combo={currentCombo} />
+          <svg
+            width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" aria-hidden="true"
+            className="text-muted-foreground/30 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+          >
+            <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+          </svg>
+        </button>
 
-            {/* Full edit (settings) */}
-            <button
-              onClick={onFullEdit}
-              title="Edit action and flags"
-              aria-label={`Edit action for ${label}`}
-              className={cn(
-                "flex-shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 transition-opacity",
-                "text-muted-foreground hover:text-foreground hover:bg-muted",
-                "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              )}
-            >
-              <Settings2 className="size-3.5" />
-            </button>
-
-            {/* Reset */}
-            {isModified && (
-              <button
-                onClick={onReset}
-                title="Reset to original"
-                aria-label={`Reset ${label} to original`}
-                className={cn(
-                  "flex-shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 transition-opacity",
-                  "text-muted-foreground hover:text-foreground hover:bg-muted",
-                  "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                )}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                  <path d="M3 3v5h5"/>
-                </svg>
-              </button>
+        {/* Reset */}
+        {isModified && (
+          <button
+            onClick={onReset}
+            title="Reset to original"
+            aria-label={`Reset ${label} to original`}
+            className={cn(
+              "flex-shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 transition-opacity",
+              "text-muted-foreground hover:text-foreground hover:bg-muted",
+              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             )}
-
-            {/* Delete */}
-            <button
-              onClick={onDelete}
-              title="Remove binding"
-              aria-label={`Remove ${label}`}
-              className={cn(
-                "flex-shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 transition-opacity",
-                "text-muted-foreground hover:text-destructive hover:bg-destructive/10",
-                "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              )}
-            >
-              <Trash2 className="size-3.5" />
-            </button>
-          </>
-        ) : (
-          <KeyRecorder
-            value={currentCombo}
-            onRecorded={onSave}
-            onCancel={onCancelEdit}
-            conflict={conflict}
-          />
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+              <path d="M3 3v5h5"/>
+            </svg>
+          </button>
         )}
+
+        {/* Delete */}
+        <button
+          onClick={onDelete}
+          title="Remove binding"
+          aria-label={`Remove ${label}`}
+          className={cn(
+            "flex-shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 transition-opacity",
+            "text-muted-foreground hover:text-destructive hover:bg-destructive/10",
+            "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          )}
+        >
+          <Trash2 className="size-3.5" />
+        </button>
       </div>
     </div>
   );
@@ -533,7 +280,6 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
 
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("All");
-  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<KeybindEntry | null>(null);
   const [undoData, setUndoData] = useState<UndoData | null>(null);
@@ -579,39 +325,9 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
 
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
-  // ── Conflict detection ────────────────────────────────────────────────────
-
-  const getConflict = useCallback((entry: KeybindEntry): string | undefined => {
-    const combo = entryToCombo(entry);
-    if (!combo) return undefined;
-    const mods = comboToMods(combo);
-    const conflicts = findEntryConflicts(allEntries, entry, mods, combo.key);
-    if (conflicts.length > 0) {
-      const c = conflicts[0];
-      return `${c.func} (${c.mods || "none"} + ${c.key})`;
-    }
-    return undefined;
-  }, [allEntries]);
-
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   const entryKey = (e: KeybindEntry) => `${e.configKey}[${e.configIndex}]`;
-
-  const handleEdit = useCallback((entry: KeybindEntry) => {
-    setEditingKey(entryKey(entry));
-  }, []);
-
-  const handleInlineSave = useCallback((entry: KeybindEntry, combo: KeyCombo | null) => {
-    const newMods = combo ? comboToMods(combo) : "none";
-    const newKey = combo ? combo.key : "";
-    const newValue = [newMods, newKey, entry.func, entry.args].filter(Boolean).join(",");
-    updateEntry(entry.configKey, entry.configIndex, newValue);
-    setEditingKey(null);
-  }, [updateEntry]);
-
-  const handleCancelEdit = useCallback(() => {
-    setEditingKey(null);
-  }, []);
 
   const handleReset = useCallback((entry: KeybindEntry) => {
     const orig = originalCombosRef.current.get(entryKey(entry));
@@ -685,8 +401,7 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
           <h2 className="text-base font-semibold">Keybindings</h2>
           <p className="text-sm text-muted-foreground">
             Manage system shortcuts, window rules, and custom shell scripts.
-            Use the inline recorder to quickly change a key combination, or
-            click the settings icon for the full editor.
+            Click a keybinding to open the full editor.
           </p>
         </div>
 
@@ -856,18 +571,9 @@ export function KeybindingsPanel({ focusKey }: PanelProps) {
                       label={e.func}
                       description={desc}
                       originalCombo={originalCombosRef.current.get(ek) ?? null}
-                      isEditing={editingKey === ek}
-                      conflict={
-                        editingKey === ek
-                          ? getConflict(e)
-                          : undefined
-                      }
-                      onEdit={() => handleEdit(e)}
-                      onSave={combo => handleInlineSave(e, combo)}
-                      onCancelEdit={handleCancelEdit}
+                      onEdit={() => handleOpenDialog(e)}
                       onReset={() => handleReset(e)}
                       onDelete={() => handleDelete(e)}
-                      onFullEdit={() => handleOpenDialog(e)}
                     />
                   );
                 })}
