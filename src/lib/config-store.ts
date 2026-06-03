@@ -150,7 +150,8 @@ export const useConfigStore = create<ConfigStore>()(
 
       addEntry: (key, value) =>
         set((state) => {
-          const files = patchFile(state.files, 0, (prev) => ({
+          const fileIdx = fileIndexForKey(state.files, key);
+          const files = patchFile(state.files, fileIdx, (prev) => ({
             ...prev,
             [key]: [...(prev[key] ?? []), value],
           }));
