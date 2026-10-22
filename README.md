@@ -1,3 +1,4 @@
 # mangowm settings
 
-A gui settings app for configuring mangowm.
+> [!NOTE]
+moved to https://github.com/mangowm/mangowm.github.io/tree/main/apps/settings
